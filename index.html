@@ -1,31 +1,113 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <meta charset="utf-8">
-  <style>
-    html, body { margin: 0; height: 100%; background: #111; }
-    model-viewer { width: 100%; height: 100%; }
-  </style>
-  <script type="module"
-    src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.5.0/model-viewer.min.js"></script>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; height: 100%; background: #111; overflow: hidden; }
+  canvas { display: block; }
+</style>
+<script type="importmap">
+{ "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
 </head>
 <body>
-  <model-viewer id="mv"
-    src="peta.glb"
-    camera-controls
-    auto-rotate
-    environment-image="neutral"
-    shadow-intensity="1"
-    exposure="1.1">
-  </model-viewer>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
-  <script>
-    // Penerima data dari panel Grafana (dipakai untuk tahap dinamis nanti)
-    window.addEventListener('message', (e) => {
-      if (e.data && e.data.type === 'data') {
-        console.log('Data diterima:', e.data.rows);
-      }
-    });
-  </script>
+// ====== PENGATURAN ======
+const NAMA_SATELIT  = ['SATELIT_1', 'SATELIT_2']; // sesuaikan dengan nama di Blender
+const AYUN_DERAJAT  = 20;   // berayun kiri-kanan ±20° (total 40°, bukan 180°)
+const AYUN_KECEPATAN = 1.0; // makin besar makin cepat
+const APUNG_TINGGI  = 0.02; // tinggi naik-turun, relatif terhadap ukuran model
+const APUNG_KECEPATAN = 1.6;
+// ========================
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setSize(innerWidth, innerHeight);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x111111);
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+
+const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.01, 1000);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.autoRotate = false; // peta tidak berputar sendiri
+
+const satelit = [];
+
+new GLTFLoader().load('peta.glb', (gltf) => {
+  scene.add(gltf.scene);
+
+  // Atur kamera otomatis sesuai ukuran model
+  const box = new THREE.Box3().setFromObject(gltf.scene);
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  const maxDim = Math.max(size.x, size.y, size.z);
+  camera.position.set(center.x, center.y + maxDim * 0.5, center.z + maxDim * 1.3);
+  controls.target.copy(center);
+  controls.update();
+
+  // Cari satelit berdasarkan nama
+  NAMA_SATELIT.forEach((nama, i) => {
+    const obj = gltf.scene.getObjectByName(nama);
+    if (obj) {
+      satelit.push({
+        obj,
+        y0: obj.position.y,
+        rotY0: obj.rotation.y,
+        fase: i * 1.5,                 // beda fase supaya geraknya tidak kembar
+        amp: maxDim * APUNG_TINGGI
+      });
+    } else {
+      console.warn('Objek tidak ditemukan:', nama);
+    }
+  });
+
+  // Bantuan: tampilkan semua nama objek jika nama di atas salah
+  if (satelit.length < NAMA_SATELIT.length) {
+    const daftar = [];
+    gltf.scene.traverse(o => daftar.push(o.name));
+    console.log('Nama objek yang ada di model:', daftar);
+  }
+});
+
+const clock = new THREE.Clock();
+function animate() {
+  requestAnimationFrame(animate);
+  const t = clock.getElapsedTime();
+
+  satelit.forEach(s => {
+    s.obj.rotation.y  = s.rotY0 + Math.sin(t * AYUN_KECEPATAN + s.fase) * THREE.MathUtils.degToRad(AYUN_DERAJAT);
+    s.obj.position.y  = s.y0 + Math.sin(t * APUNG_KECEPATAN + s.fase) * s.amp;
+  });
+
+  controls.update();
+  renderer.render(scene, camera);
+}
+animate();
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+// Penerima data dari Grafana (untuk tahap angka dinamis)
+addEventListener('message', (e) => {
+  if (e.data && e.data.type === 'data') console.log('Data diterima:', e.data.rows);
+});
+</script>
 </body>
 </html>
