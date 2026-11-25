@@ -3,10 +3,17 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <title>Peta 3D</title>
 <style>
   html, body { margin: 0; height: 100%; background: #ffffff; overflow: hidden; }
   canvas { display: block; }
+  #versi {
+    position: absolute; right: 8px; bottom: 6px;
+    font: 11px monospace; color: #888; pointer-events: none;
+  }
 </style>
 <script type="importmap">
 { "imports": {
@@ -16,6 +23,7 @@
 </script>
 </head>
 <body>
+<div id="versi">v3</div>
 <script type="module">
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -24,6 +32,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
 // ================== PENGATURAN ==================
+const VERSI           = 3;                 // naikkan setiap kali Anda mengubah file ini atau peta.glb
 const FILE_MODEL      = 'peta.glb';
 const NAMA_SATELIT    = ['SATELIT_1', 'SATELIT_2']; // sesuaikan dengan nama objek di Blender
 const AYUN_DERAJAT    = 20;    // berayun kiri-kanan ±20° (bukan putaran penuh)
@@ -31,8 +40,15 @@ const AYUN_KECEPATAN  = 1.0;   // makin besar makin cepat
 const APUNG_TINGGI    = 0.02;  // tinggi naik-turun (relatif ukuran model)
 const APUNG_KECEPATAN = 1.6;
 const WARNA_LATAR     = 0xffffff;
-const OPACITY_SHADOW  = 0.25;  // 0.15 (tipis) sampai 0.4 (pekat)
+const OPACITY_SHADOW  = 0.35;  // 0.15 (tipis) sampai 0.5 (pekat)
+const CAHAYA_LINGKUNGAN = 0.45; // makin kecil makin kontras, bayangan makin jelas
+const CAHAYA_LAMPU    = 3.0;
+const TAMPILKAN_VERSI = true;  // ubah ke false jika label versi tidak diperlukan
 // =================================================
+
+console.log('index.html versi', VERSI);
+document.getElementById('versi').textContent = 'v' + VERSI;
+document.getElementById('versi').style.display = TAMPILKAN_VERSI ? 'block' : 'none';
 
 // Renderer
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -51,15 +67,16 @@ const pmrem = new THREE.PMREMGenerator(renderer);
 scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
 
 // Lampu utama (penghasil shadow)
-const sun = new THREE.DirectionalLight(0xffffff, 2.0);
+const sun = new THREE.DirectionalLight(0xffffff, CAHAYA_LAMPU);
 sun.castShadow = true;
-sun.shadow.mapSize.set(2048, 2048);
-sun.shadow.bias = -0.0005;
+sun.shadow.mapSize.set(4096, 4096);
+sun.shadow.bias = -0.0003;
 sun.shadow.normalBias = 0.02;
+sun.shadow.radius = 3;
 scene.add(sun);
 scene.add(sun.target);
 
-// Tanah putih yang hanya menampilkan bayangan
+// Tanah yang hanya menampilkan bayangan (di bawah model)
 const ground = new THREE.Mesh(
   new THREE.PlaneGeometry(1, 1),
   new THREE.ShadowMaterial({ opacity: OPACITY_SHADOW })
@@ -82,10 +99,23 @@ loader.setDRACOLoader(draco);
 
 const satelit = [];
 
+// "?v=" memaksa browser mengambil peta.glb terbaru
 loader.load(
-  FILE_MODEL,
+  FILE_MODEL + '?v=' + VERSI,
   (gltf) => {
     scene.add(gltf.scene);
+
+    // Semua objek menghasilkan dan menerima shadow; kurangi cahaya lingkungan
+    gltf.scene.traverse((o) => {
+      if (o.isMesh) {
+        o.castShadow = true;
+        o.receiveShadow = true;
+        const mats = Array.isArray(o.material) ? o.material : [o.material];
+        mats.forEach((m) => {
+          if (m && 'envMapIntensity' in m) m.envMapIntensity = CAHAYA_LINGKUNGAN;
+        });
+      }
+    });
 
     // Ukuran model
     const box = new THREE.Box3().setFromObject(gltf.scene);
@@ -93,13 +123,8 @@ loader.load(
     const center = box.getCenter(new THREE.Vector3());
     const maxDim = Math.max(size.x, size.y, size.z);
 
-    // Semua objek menghasilkan dan menerima shadow
-    gltf.scene.traverse((o) => {
-      if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; }
-    });
-
     // Posisi dan jangkauan lampu menyesuaikan ukuran model
-    sun.position.set(center.x + maxDim * 0.6, center.y + maxDim * 1.2, center.z + maxDim * 0.8);
+    sun.position.set(center.x + maxDim * 0.5, center.y + maxDim * 1.2, center.z + maxDim * 0.7);
     sun.target.position.copy(center);
     const cam = sun.shadow.camera;
     cam.left = -maxDim; cam.right = maxDim;
