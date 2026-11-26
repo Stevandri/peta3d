@@ -32,7 +32,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
 // ================== PENGATURAN ==================
-const VERSI           = 4;                 // naikkan setiap kali Anda mengubah file ini atau peta.glb
+const VERSI           = 5;                 // naikkan setiap kali Anda mengubah file ini atau peta.glb
 const FILE_MODEL      = 'peta.glb';
 const NAMA_SATELIT    = ['SATELIT_1', 'SATELIT_2']; // sesuaikan dengan nama objek di Blender
 const AYUN_DERAJAT    = 20;    // berayun kiri-kanan ±20° (bukan putaran penuh)
@@ -45,7 +45,7 @@ const CAHAYA_LINGKUNGAN = 0.45; // makin kecil makin kontras, bayangan makin jel
 const CAHAYA_LAMPU    = 3.0;
 const ZOOM_MIN        = 0.6;   // jarak terdekat (x ukuran model); naikkan jika masih terlalu dekat
 const ZOOM_MAX        = 2.5;   // jarak terjauh (x ukuran model)
-const ZOOM_KECEPATAN  = 0.4;   // 1 = bawaan; makin kecil makin halus
+const ZOOM_LANGKAH    = 0.04;  // zoom per scroll (0.04 = 4%); makin kecil makin halus
 const TAMPILKAN_VERSI = true;  // ubah ke false jika label versi tidak diperlukan
 // =================================================
 
@@ -93,8 +93,19 @@ const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.01, 1
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.autoRotate = false; // peta tidak berputar sendiri
-controls.zoomSpeed = ZOOM_KECEPATAN;
+controls.enableZoom = false; // zoom diatur manual di bawah agar halus
 controls.maxPolarAngle = Math.PI * 0.49; // kamera tidak masuk ke bawah lantai
+
+// Zoom manual: langkah kecil tetap per scroll, apa pun kuat scroll-nya
+renderer.domElement.addEventListener('wheel', (e) => {
+  e.preventDefault(); // halaman dashboard tidak ikut bergulir
+  const d = Math.max(-100, Math.min(100, e.deltaY)) / 100; // dibatasi -1..1
+  const offset = camera.position.clone().sub(controls.target);
+  let dist = offset.length() * Math.pow(1 + ZOOM_LANGKAH, d);
+  dist = Math.max(controls.minDistance, Math.min(controls.maxDistance, dist));
+  offset.setLength(dist);
+  camera.position.copy(controls.target).add(offset);
+}, { passive: false });
 
 // Loader (mendukung file .glb dengan kompresi Draco)
 const draco = new DRACOLoader();
