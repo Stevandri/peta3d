@@ -32,7 +32,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
 // ================== PENGATURAN ==================
-const VERSI           = 3;                 // naikkan setiap kali Anda mengubah file ini atau peta.glb
+const VERSI           = 4;                 // naikkan setiap kali Anda mengubah file ini atau peta.glb
 const FILE_MODEL      = 'peta.glb';
 const NAMA_SATELIT    = ['SATELIT_1', 'SATELIT_2']; // sesuaikan dengan nama objek di Blender
 const AYUN_DERAJAT    = 20;    // berayun kiri-kanan ±20° (bukan putaran penuh)
@@ -43,6 +43,9 @@ const WARNA_LATAR     = 0xffffff;
 const OPACITY_SHADOW  = 0.35;  // 0.15 (tipis) sampai 0.5 (pekat)
 const CAHAYA_LINGKUNGAN = 0.45; // makin kecil makin kontras, bayangan makin jelas
 const CAHAYA_LAMPU    = 3.0;
+const ZOOM_MIN        = 0.6;   // jarak terdekat (x ukuran model); naikkan jika masih terlalu dekat
+const ZOOM_MAX        = 2.5;   // jarak terjauh (x ukuran model)
+const ZOOM_KECEPATAN  = 0.4;   // 1 = bawaan; makin kecil makin halus
 const TAMPILKAN_VERSI = true;  // ubah ke false jika label versi tidak diperlukan
 // =================================================
 
@@ -90,6 +93,8 @@ const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.01, 1
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.autoRotate = false; // peta tidak berputar sendiri
+controls.zoomSpeed = ZOOM_KECEPATAN;
+controls.maxPolarAngle = Math.PI * 0.49; // kamera tidak masuk ke bawah lantai
 
 // Loader (mendukung file .glb dengan kompresi Draco)
 const draco = new DRACOLoader();
@@ -135,6 +140,13 @@ loader.load(
     // Tanah tepat di bawah model
     ground.scale.set(maxDim * 4, maxDim * 4, 1);
     ground.position.set(center.x, box.min.y - 0.001, center.z);
+
+    // Batas zoom dan jarak pandang kamera menyesuaikan ukuran model
+    controls.minDistance = maxDim * ZOOM_MIN;
+    controls.maxDistance = maxDim * ZOOM_MAX;
+    camera.near = maxDim * 0.01;
+    camera.far  = maxDim * 50;
+    camera.updateProjectionMatrix();
 
     // Kamera otomatis sesuai ukuran model
     camera.position.set(center.x, center.y + maxDim * 0.5, center.z + maxDim * 1.3);
