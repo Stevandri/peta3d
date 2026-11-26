@@ -14,6 +14,12 @@
     position: absolute; right: 8px; bottom: 6px;
     font: 11px monospace; color: #888; pointer-events: none;
   }
+  #zoomui { position: absolute; left: 8px; bottom: 8px; display: flex; gap: 6px; }
+  #zoomui button {
+    width: 32px; height: 32px; border: 1px solid #ccc; border-radius: 6px;
+    background: rgba(255,255,255,.9); font: bold 18px sans-serif; cursor: pointer;
+  }
+  #zoomui button:hover { background: #eee; }
 </style>
 <script type="importmap">
 { "imports": {
@@ -23,7 +29,8 @@
 </script>
 </head>
 <body>
-<div id="versi">v3</div>
+<div id="versi">v6</div>
+<div id="zoomui"><button id="zin" title="Perbesar">+</button><button id="zout" title="Perkecil">−</button></div>
 <script type="module">
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -31,8 +38,12 @@ import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
+// Pengaturan dari URL iframe, contoh: ?v=6&step=0.02&min=0.8&max=2&zoom=0
+const P = new URLSearchParams(location.search);
+const num = (k, d) => { const v = parseFloat(P.get(k)); return isNaN(v) ? d : v; };
+
 // ================== PENGATURAN ==================
-const VERSI           = 5;                 // naikkan setiap kali Anda mengubah file ini atau peta.glb
+const VERSI           = 6;                 // naikkan setiap kali Anda mengubah file ini atau peta.glb
 const FILE_MODEL      = 'peta.glb';
 const NAMA_SATELIT    = ['SATELIT_1', 'SATELIT_2']; // sesuaikan dengan nama objek di Blender
 const AYUN_DERAJAT    = 20;    // berayun kiri-kanan ±20° (bukan putaran penuh)
@@ -43,15 +54,20 @@ const WARNA_LATAR     = 0xffffff;
 const OPACITY_SHADOW  = 0.35;  // 0.15 (tipis) sampai 0.5 (pekat)
 const CAHAYA_LINGKUNGAN = 0.45; // makin kecil makin kontras, bayangan makin jelas
 const CAHAYA_LAMPU    = 3.0;
-const ZOOM_MIN        = 0.6;   // jarak terdekat (x ukuran model); naikkan jika masih terlalu dekat
-const ZOOM_MAX        = 2.5;   // jarak terjauh (x ukuran model)
-const ZOOM_LANGKAH    = 0.04;  // zoom per scroll (0.04 = 4%); makin kecil makin halus
+const ZOOM_MIN        = num('min', 0.6);   // jarak terdekat (x ukuran model); naikkan jika masih terlalu dekat
+const ZOOM_MAX        = num('max', 2.5);   // jarak terjauh (x ukuran model)
+const ZOOM_LANGKAH    = num('step', 0.04);  // zoom per scroll (0.04 = 4%); makin kecil makin halus
+const ZOOM_SCROLL     = P.get('zoom') !== '0';  // zoom=0 mematikan zoom lewat scroll
+const TOMBOL_ZOOM     = P.get('ui') !== '0';    // ui=0 menyembunyikan tombol + / -
+const DEBUG           = P.get('debug') === '1'; // debug=1 menampilkan jarak kamera
 const TAMPILKAN_VERSI = true;  // ubah ke false jika label versi tidak diperlukan
 // =================================================
 
 console.log('index.html versi', VERSI);
-document.getElementById('versi').textContent = 'v' + VERSI;
-document.getElementById('versi').style.display = TAMPILKAN_VERSI ? 'block' : 'none';
+const elVersi = document.getElementById('versi');
+elVersi.textContent = 'v' + VERSI;
+document.getElementById('zoomui').style.display = TOMBOL_ZOOM ? 'flex' : 'none';
+elVersi.style.display = TAMPILKAN_VERSI ? 'block' : 'none';
 
 // Renderer
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -96,16 +112,23 @@ controls.autoRotate = false; // peta tidak berputar sendiri
 controls.enableZoom = false; // zoom diatur manual di bawah agar halus
 controls.maxPolarAngle = Math.PI * 0.49; // kamera tidak masuk ke bawah lantai
 
-// Zoom manual: langkah kecil tetap per scroll, apa pun kuat scroll-nya
-renderer.domElement.addEventListener('wheel', (e) => {
-  e.preventDefault(); // halaman dashboard tidak ikut bergulir
-  const d = Math.max(-100, Math.min(100, e.deltaY)) / 100; // dibatasi -1..1
+// Zoom: d positif = menjauh, negatif = mendekat
+function zoomBy(d) {
   const offset = camera.position.clone().sub(controls.target);
   let dist = offset.length() * Math.pow(1 + ZOOM_LANGKAH, d);
   dist = Math.max(controls.minDistance, Math.min(controls.maxDistance, dist));
   offset.setLength(dist);
   camera.position.copy(controls.target).add(offset);
+}
+// Scroll: langkah kecil tetap, apa pun kuat scroll-nya
+renderer.domElement.addEventListener('wheel', (e) => {
+  if (!ZOOM_SCROLL) return; // zoom=0: biarkan halaman dashboard bergulir
+  e.preventDefault();
+  zoomBy(Math.max(-100, Math.min(100, e.deltaY)) / 100);
 }, { passive: false });
+// Tombol + / -
+document.getElementById('zin').onclick  = () => zoomBy(-5);
+document.getElementById('zout').onclick = () => zoomBy(5);
 
 // Loader (mendukung file .glb dengan kompresi Draco)
 const draco = new DRACOLoader();
@@ -203,6 +226,8 @@ function animate() {
   });
 
   controls.update();
+  if (DEBUG) elVersi.textContent = 'v' + VERSI + ' | jarak ' + camera.position.distanceTo(controls.target).toFixed(2) +
+    ' (min ' + controls.minDistance.toFixed(2) + ', max ' + controls.maxDistance.toFixed(2) + ')';
   renderer.render(scene, camera);
 }
 animate();
