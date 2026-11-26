@@ -20,6 +20,19 @@
     background: rgba(255,255,255,.9); font: bold 18px sans-serif; cursor: pointer;
   }
   #zoomui button:hover { background: #eee; }
+  #labels { position: absolute; top: 0; left: 0; pointer-events: none; }
+  .lbl {
+    --warna: #888;
+    display: flex; align-items: center; gap: 8px;
+    background: rgba(255,255,255,.95); border: 1px solid #ddd; border-left: 5px solid var(--warna);
+    border-radius: 8px; padding: 5px 10px; box-shadow: 0 2px 8px rgba(0,0,0,.2);
+    font-family: sans-serif; pointer-events: none; white-space: nowrap;
+  }
+  .lbl .ikon { font-size: 22px; line-height: 1; }
+  .lbl .nama { font-size: 10px; color: #666; letter-spacing: .5px; }
+  .lbl .nilai { font-size: 18px; font-weight: bold; color: #111; }
+  .lbl.pulse { animation: pulse .6s ease; }
+  @keyframes pulse { 0% { transform: scale(1.25); } 100% { transform: scale(1); } }
 </style>
 <script type="importmap">
 { "imports": {
@@ -29,13 +42,14 @@
 </script>
 </head>
 <body>
-<div id="versi">v6</div>
+<div id="versi">v7</div>
 <div id="zoomui"><button id="zin" title="Perbesar">+</button><button id="zout" title="Perkecil">−</button></div>
 <script type="module">
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
 // Pengaturan dari URL iframe, contoh: ?v=6&step=0.02&min=0.8&max=2&zoom=0
@@ -43,7 +57,7 @@ const P = new URLSearchParams(location.search);
 const num = (k, d) => { const v = parseFloat(P.get(k)); return isNaN(v) ? d : v; };
 
 // ================== PENGATURAN ==================
-const VERSI           = 6;                 // naikkan setiap kali Anda mengubah file ini atau peta.glb
+const VERSI           = 7;                 // naikkan setiap kali Anda mengubah file ini atau peta.glb
 const FILE_MODEL      = 'peta.glb';
 const NAMA_SATELIT    = ['SATELIT_1', 'SATELIT_2']; // sesuaikan dengan nama objek di Blender
 const AYUN_DERAJAT    = 20;    // berayun kiri-kanan ±20° (bukan putaran penuh)
@@ -60,8 +74,23 @@ const ZOOM_LANGKAH    = num('step', 0.04);  // zoom per scroll (0.04 = 4%); maki
 const ZOOM_SCROLL     = P.get('zoom') !== '0';  // zoom=0 mematikan zoom lewat scroll
 const TOMBOL_ZOOM     = P.get('ui') !== '0';    // ui=0 menyembunyikan tombol + / -
 const DEBUG           = P.get('debug') === '1'; // debug=1 menampilkan jarak kamera
+const LAMPU_GLB       = P.get('lampu') !== 'default'; // pakai lampu dari .glb jika ada; lampu=default memaksa lampu bawaan
+const SKALA_LAMPU     = num('lampuskala', 1);         // kalikan kekuatan lampu .glb (mis. 0.01 jika terlalu terang)
 const TAMPILKAN_VERSI = true;  // ubah ke false jika label versi tidak diperlukan
 // =================================================
+
+// Kotak label di peta. 'kunci' = nama wilayah di kolom pertama data.
+// 'obj' = nama objek di Blender (jika ada, posisi otomatis). Jika tidak ketemu, dipakai fx/fz
+// (posisi 0..1 pada lebar/kedalaman model). Gunakan ?debug=1 lalu klik peta untuk mencari fx/fz.
+const LABEL = [
+  { kunci: 'SUMATERA',   nama: 'SUMATERA',   ikon: '📡', obj: 'SUMATERA',   fx: 0.22, fz: 0.62 },
+  { kunci: 'JAWA',       nama: 'JAWA',       ikon: '🏢', obj: 'JAWA',       fx: 0.42, fz: 0.74 },
+  { kunci: 'KALIMANTAN', nama: 'KALIMANTAN', ikon: '🛰️', obj: 'KALIMANTAN', fx: 0.46, fz: 0.56 },
+  { kunci: 'SULAWESI',   nama: 'SULAWESI',   ikon: '📶', obj: 'SULAWESI',   fx: 0.64, fz: 0.60 },
+  { kunci: 'PAPUA',      nama: 'PAPUA',      ikon: '📡', obj: 'PAPUA',      fx: 0.84, fz: 0.62 },
+];
+const BATAS_HIJAU  = 100;  // nilai >= ini : hijau
+const BATAS_ORANYE = 50;   // nilai >= ini : oranye, di bawahnya merah
 
 console.log('index.html versi', VERSI);
 const elVersi = document.getElementById('versi');
@@ -130,6 +159,82 @@ renderer.domElement.addEventListener('wheel', (e) => {
 document.getElementById('zin').onclick  = () => zoomBy(-5);
 document.getElementById('zout').onclick = () => zoomBy(5);
 
+// ===== Label angka + ikon =====
+const labelRenderer = new CSS2DRenderer();
+labelRenderer.setSize(innerWidth, innerHeight);
+labelRenderer.domElement.id = 'labels';
+document.body.appendChild(labelRenderer.domElement);
+
+let modelRoot = null, modelBox = null, lastRows = null, klikInfo = '';
+const labels = {};
+const raycaster = new THREE.Raycaster();
+
+function permukaanY(x, z) {
+  raycaster.set(new THREE.Vector3(x, modelBox.max.y + 1, z), new THREE.Vector3(0, -1, 0));
+  const hit = raycaster.intersectObject(modelRoot, true)[0];
+  return hit ? hit.point.y : modelBox.min.y;
+}
+
+function buatLabel(cfg, maxDim) {
+  let x, z;
+  const obj = cfg.obj ? modelRoot.getObjectByName(cfg.obj) : null;
+  if (obj) {
+    const c = new THREE.Box3().setFromObject(obj).getCenter(new THREE.Vector3());
+    x = c.x; z = c.z;
+  } else {
+    const size = modelBox.getSize(new THREE.Vector3());
+    x = modelBox.min.x + size.x * cfg.fx;
+    z = modelBox.min.z + size.z * cfg.fz;
+  }
+  const y = permukaanY(x, z) + maxDim * 0.04;
+
+  const el = document.createElement('div');
+  el.className = 'lbl';
+  el.innerHTML = '<span class="ikon">' + cfg.ikon + '</span><div><div class="nama">' +
+                 cfg.nama + '</div><div class="nilai">-</div></div>';
+  const o = new CSS2DObject(el);
+  o.position.set(x, y, z);
+  scene.add(o);
+  labels[cfg.kunci.toUpperCase()] = { el, nilaiEl: el.querySelector('.nilai') };
+}
+
+// rows = [{kolom1: 'SUMATERA', kolom2: 120}, ...] : kolom pertama = kunci, kolom kedua = nilai
+function terapkanData(rows) {
+  lastRows = rows;
+  if (!modelRoot || !Array.isArray(rows)) return;
+  rows.forEach((row) => {
+    const k = Object.keys(row);
+    const id = String(row[k[0]]).trim().toUpperCase();
+    const nilai = Number(row[k[1]]);
+    const L = labels[id];
+    if (!L) return;
+    const teks = isNaN(nilai) ? String(row[k[1]]) : nilai.toLocaleString('id-ID');
+    if (L.nilaiEl.textContent !== teks) {
+      L.nilaiEl.textContent = teks;
+      L.el.classList.remove('pulse'); void L.el.offsetWidth; L.el.classList.add('pulse');
+    }
+    const warna = isNaN(nilai) ? '#888' : nilai >= BATAS_HIJAU ? '#16a34a' : nilai >= BATAS_ORANYE ? '#f59e0b' : '#dc2626';
+    L.el.style.setProperty('--warna', warna);
+  });
+}
+
+// Mode debug: klik peta untuk melihat nilai fx/fz
+let down = null;
+renderer.domElement.addEventListener('pointerdown', (e) => { down = [e.clientX, e.clientY]; });
+renderer.domElement.addEventListener('pointerup', (e) => {
+  if (!DEBUG || !modelRoot || !down) return;
+  if (Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 5) return;
+  raycaster.setFromCamera(new THREE.Vector2(e.clientX / innerWidth * 2 - 1, -(e.clientY / innerHeight) * 2 + 1), camera);
+  const hit = raycaster.intersectObject(modelRoot, true)[0];
+  if (hit) {
+    const size = modelBox.getSize(new THREE.Vector3());
+    const fx = ((hit.point.x - modelBox.min.x) / size.x).toFixed(2);
+    const fz = ((hit.point.z - modelBox.min.z) / size.z).toFixed(2);
+    klikInfo = ' | klik: fx ' + fx + ', fz ' + fz + ', obj ' + hit.object.name;
+    console.log('Posisi klik:', { fx, fz, obj: hit.object.name });
+  }
+});
+
 // Loader (mendukung file .glb dengan kompresi Draco)
 const draco = new DRACOLoader();
 draco.setDecoderPath('https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/libs/draco/');
@@ -171,6 +276,35 @@ loader.load(
     cam.near = 0.1;     cam.far = maxDim * 5;
     cam.updateProjectionMatrix();
 
+    // Lampu dari .glb (Blender): dipakai jika ada, dan bayangannya dinyalakan di sini
+    gltf.scene.updateMatrixWorld(true);
+    const lampuGlb = [];
+    gltf.scene.traverse((o) => { if (o.isLight) lampuGlb.push(o); });
+    console.log('Lampu dari GLB:', lampuGlb.length);
+    if (LAMPU_GLB && lampuGlb.length) {
+      sun.visible = false;          // matikan lampu bawaan
+      sun.castShadow = false;
+      lampuGlb.forEach((l) => {
+        l.intensity *= SKALA_LAMPU;
+        l.castShadow = true;
+        l.shadow.mapSize.set(4096, 4096);
+        l.shadow.bias = -0.0003;
+        l.shadow.normalBias = 0.02;
+        if (l.isDirectionalLight) {
+          // Arah tetap seperti di Blender, tapi posisinya digeser agar menyorot tepat ke model
+          const wp = new THREE.Vector3(); l.getWorldPosition(wp);
+          const tp = new THREE.Vector3(); l.target.getWorldPosition(tp);
+          const dir = tp.sub(wp).normalize();
+          const newWorld = center.clone().addScaledVector(dir, -maxDim * 2);
+          l.position.copy(l.parent.worldToLocal(newWorld));
+          const c = l.shadow.camera;
+          c.left = -maxDim; c.right = maxDim; c.top = maxDim; c.bottom = -maxDim;
+          c.near = 0.1; c.far = maxDim * 6;
+          c.updateProjectionMatrix();
+        }
+      });
+    }
+
     // Tanah tepat di bawah model
     ground.scale.set(maxDim * 4, maxDim * 4, 1);
     ground.position.set(center.x, box.min.y - 0.001, center.z);
@@ -186,6 +320,13 @@ loader.load(
     camera.position.set(center.x, center.y + maxDim * 0.5, center.z + maxDim * 1.3);
     controls.target.copy(center);
     controls.update();
+
+    // Buat label angka di peta
+    modelRoot = gltf.scene;
+    modelBox = box;
+    modelRoot.updateMatrixWorld(true);
+    LABEL.forEach((cfg) => buatLabel(cfg, maxDim));
+    terapkanData(lastRows);
 
     // Cari satelit berdasarkan nama
     NAMA_SATELIT.forEach((nama, i) => {
@@ -227,8 +368,9 @@ function animate() {
 
   controls.update();
   if (DEBUG) elVersi.textContent = 'v' + VERSI + ' | jarak ' + camera.position.distanceTo(controls.target).toFixed(2) +
-    ' (min ' + controls.minDistance.toFixed(2) + ', max ' + controls.maxDistance.toFixed(2) + ')';
+    ' (min ' + controls.minDistance.toFixed(2) + ', max ' + controls.maxDistance.toFixed(2) + ')' + klikInfo;
   renderer.render(scene, camera);
+  labelRenderer.render(scene, camera);
 }
 animate();
 
@@ -237,13 +379,12 @@ addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
+  labelRenderer.setSize(innerWidth, innerHeight);
 });
 
-// Penerima data dari panel Grafana (untuk tahap angka dinamis)
+// Penerima data dari panel Grafana
 addEventListener('message', (e) => {
-  if (e.data && e.data.type === 'data') {
-    console.log('Data diterima:', e.data.rows);
-  }
+  if (e.data && e.data.type === 'data') terapkanData(e.data.rows);
 });
 </script>
 </body>
